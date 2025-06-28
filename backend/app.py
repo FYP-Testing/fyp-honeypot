@@ -1,53 +1,87 @@
-# app.py
+# backend/app.py
+
 from flask import Flask, jsonify, request
 from elasticsearch import Elasticsearch
-from flask_cors import CORS
 import geoip2.database
+import os
 
 app = Flask(__name__)
-CORS(app)
-app.secret_key = "change_this_to_secure_key"
 
-# ElasticSearch and GeoIP setup
-es = Elasticsearch("http://localhost:9200")
-GEOIP_DB = "./geoip/GeoLite2-City.mmdb"
-reader = geoip2.database.Reader("/opt/fyp-honeypot/geoip/GeoLite2-City.mmdb")
+# === Configuration ===
+ES_HOST = "http://localhost:9200"  # Update to your T-Pot IP if needed
+GEOIP_DB_PATH = os.path.join(os.path.dirname(__file__), 'GeoLite2-City.mmdb')
 
-def ip_to_location(ip):
+# === Elasticsearch connection ===
+es = Elasticsearch(ES_HOST)
+
+# === GeoIP Reader ===
+geo_reader = geoip2.database.Reader(GEOIP_DB_PATH)
+
+# === Helper: Get GeoIP ===
+def ip_to_geo(ip):
     try:
-        response = reader.city(ip)
+        response = geo_reader.city(ip)
         return {
-            "ip": ip,
-            "country": response.country.name,
-            "city": response.city.name,
             "lat": response.location.latitude,
-            "lon": response.location.longitude
+            "lon": response.location.longitude,
+            "city": response.city.name,
+            "country": response.country.name
         }
     except:
-        return {"ip": ip, "country": "Unknown", "city": "Unknown", "lat": 0, "lon": 0}
+        return {"lat": None, "lon": None, "city": None, "country": None}
 
-@app.route("/api/map_data")
-def map_data():
-    query = {"size": 100, "query": {"match_all": {}}}
-    results = es.search(index="logstash-*", body=query)
-    data = []
-    for hit in results["hits"]["hits"]:
-        src_ip = hit["_source"].get("src_ip")
-        if src_ip:
-            loc = ip_to_location(src_ip)
-            loc["timestamp"] = hit["_source"].get("@timestamp")
-            data.append(loc)
-    return jsonify(data)
+# === Helper: Query Elasticsearch ===
+def get_logs(honeypot_type, size=20):
+    index_pattern = "logstash-*"
+    query = {
+        "size": size,
+        "query": {
+            "bool": {
+                "must": []
+            }
+        },
+        "sort": [{"@timestamp": {"order": "desc"}}]
+    }
 
-@app.route("/api/report_data")
-def report_data():
-    honeypot = request.args.get("honeypot", "*")
-    start_date = request.args.get("start_date")
-    end_date = request.args.get("end_date")
-    query = {"size": 500, "query": {"bool": {"must": []}}}
-    if honeypot != "*":
-        query["query"]["bool"]["must"].append({"match": {"program": honeypot}})
-    if start_date and end_date:
-        query["query"]["bool"]["must"].append({"range": {"@timestamp": {"gte": start_date, "lte": end_date}}})
-    results = es.search(index="logstash-*", body=query)
-    return jsonify([hit["_source"] for hit in results["hits"]["hits"]])
+    if honeypot_type == "suricata":
+        query["query"]["bool"]["must"].append({"match": {"event_type": "alert"}})
+    elif honeypot_type == "cowrie":
+        query["query"]["bool"]["must"].append({"match": {"eventid": "login.failed"}})
+    elif honeypot_type == "honeytrap":
+        query["query"]["bool"]["must"].append({"exists": {"field": "honeytrap.sensor.name"}})
+    else:
+        return []
+
+    res = es.search(index=index_pattern, body=query)
+    return [hit["_source"] for hit in res["hits"]["hits"]]
+
+# === API: Live Attacks ===
+@app.route("/api/live-attacks")
+def live_attacks():
+    logs = []
+    for honeypot in ["suricata", "cowrie", "honeytrap"]:
+        entries = get_logs(honeypot)
+        for entry in entries:
+            ip = (entry.get("src_ip") or
+                  entry.get("src_ipaddr") or
+                  entry.get("src_ip_address") or
+                  entry.get("src_host") or
+                  entry.get("remote_host"))
+            if ip:
+                geo = ip_to_geo(ip)
+                logs.append({
+                    "ip": ip,
+                    "honeypot": honeypot,
+                    "timestamp": entry.get("@timestamp"),
+                    "geo": geo,
+                })
+    return jsonify(logs)
+
+# === Index Test ===
+@app.route("/")
+def index():
+    return "Hybrid Honeypot IDPS API Running"
+
+# === Start Flask ===
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)

@@ -1,34 +1,46 @@
+<!-- frontend/map.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Live Attack Map</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>#map { height: 90vh; }</style>
+    <meta charset="UTF-8">
+    <title>Live Attack Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map { height: 100vh; width: 100%; }
+    </style>
 </head>
-<body class="bg-dark text-white">
-  <div class="container py-3">
-    <h2>Live Attack Map</h2>
+<body>
     <div id="map"></div>
-  </div>
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script>
-    const map = L.map('map').setView([20, 0], 2);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-    }).addTo(map);
 
-    async function loadData() {
-      const res = await fetch('/api/map_data');
-      const data = await res.json();
-      data.forEach(d => {
-        L.marker([d.lat, d.lon]).addTo(map)
-          .bindPopup(`<b>IP:</b> ${d.ip}<br><b>Country:</b> ${d.country}<br><b>Time:</b> ${d.timestamp}`);
-      });
-    }
-    loadData();
-    setInterval(loadData, 10000);
-  </script>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([20, 0], 2);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: 'Map data © <a href="https://openstreetmap.org">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        function loadAttacks() {
+            fetch('/api/live-attacks')
+                .then(response => response.json())
+                .then(data => {
+                    data.forEach(entry => {
+                        const lat = entry.geo.lat;
+                        const lon = entry.geo.lon;
+                        const ip = entry.ip;
+                        const type = entry.honeypot;
+                        const time = entry.timestamp;
+
+                        if (lat && lon) {
+                            L.marker([lat, lon]).addTo(map)
+                                .bindPopup(`<strong>${ip}</strong><br>Honeypot: ${type}<br>${time}`);
+                        }
+                    });
+                });
+        }
+
+        loadAttacks();
+        setInterval(loadAttacks, 10000); // Refresh every 10 seconds
+    </script>
 </body>
 </html>
